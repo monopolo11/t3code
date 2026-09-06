@@ -1,3 +1,5 @@
+import { webhookEnvironment } from "../state/webhooks";
+import type { ChatAttachment } from "@t3tools/contracts";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import {
@@ -668,6 +670,11 @@ type ChatViewProps =
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
       threadSyncPhase?: never;
+      webhookTrigger?: {
+        id: string;
+        environmentId: EnvironmentId;
+        attachments: readonly ChatAttachment[];
+      };
       routeKind: "draft";
       draftId: DraftId;
     };
@@ -1380,6 +1387,8 @@ export default function ChatView(props: ChatViewProps) {
     reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
   } = props;
+  const webhookTrigger = routeKind === "draft" ? props.webhookTrigger : undefined;
+  const saveWebhookPrompt = useAtomCommand(webhookEnvironment.operate, { reportFailure: false });
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
@@ -2153,6 +2162,7 @@ export default function ChatView(props: ChatViewProps) {
     const seen = new Set<string>();
     const envs: EnvironmentOption[] = [];
     for (const p of memberProjects) {
+      if (webhookTrigger && p.environmentId !== webhookTrigger.environmentId) continue;
       if (seen.has(p.environmentId)) continue;
       seen.add(p.environmentId);
       const isPrimary = p.environmentId === primaryEnvironmentId;
@@ -2171,7 +2181,14 @@ export default function ChatView(props: ChatViewProps) {
       return a.label.localeCompare(b.label);
     });
     return envs;
-  }, [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environmentById]);
+  }, [
+    activeProject,
+    allProjects,
+    projectGroupingSettings,
+    primaryEnvironmentId,
+    environmentById,
+    webhookTrigger,
+  ]);
   const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
   const activeEnvironmentOption =
     logicalProjectEnvironments.find(
@@ -2203,6 +2220,10 @@ export default function ChatView(props: ChatViewProps) {
     async (input: { branch: string; worktreePath: string | null; envMode: DraftThreadEnvMode }) => {
       if (!activeProject) {
         throw new Error("No active project is available for this pull request.");
+      }
+      if (webhookTrigger && draftId) {
+        setDraftThreadContext(draftId, input);
+        return getDraftSession(draftId)!.threadId;
       }
       const activeProjectRef = scopeProjectRef(activeProject.environmentId, activeProject.id);
       const logicalProjectKey = deriveLogicalProjectKeyFromSettings(
@@ -2267,6 +2288,7 @@ export default function ChatView(props: ChatViewProps) {
       draftId,
       getDraftSession,
       getDraftSessionByLogicalProjectKey,
+      webhookTrigger,
       isServerThread,
       navigate,
       projectGroupingSettings,
@@ -6327,9 +6349,17 @@ export default function ChatView(props: ChatViewProps) {
     },
   ) => {
     e?.preventDefault();
+    if (webhookTrigger && environmentId !== webhookTrigger.environmentId) {
+      setThreadError(
+        activeThread?.id ?? null,
+        "Select the machine that owns this trigger. To run elsewhere, create the integration on that machine in Settings.",
+      );
+      return;
+    }
     // Typed out in full rather than picked from the menu. Attachments or contexts
     // mean the user is sending a prompt, so those go through as usual.
     if (
+      !webhookTrigger &&
       usageLimitsOffered &&
       usageLimitsKey !== null &&
       !directAnnotation &&
@@ -6477,7 +6507,7 @@ export default function ChatView(props: ChatViewProps) {
       composerReviewComments.length === 0
         ? parseCodexFeedbackCommand(trimmed)
         : null;
-    if (feedbackCommand) {
+    if (feedbackCommand && !webhookTrigger) {
       if (!isServerThread || activeThread.session === null) {
         toastManager.add(
           stackedThreadToast({
@@ -6605,7 +6635,7 @@ export default function ChatView(props: ChatViewProps) {
       composerReviewComments.length === 0
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
-    if (standaloneSlashCommand) {
+    if (standaloneSlashCommand && !webhookTrigger) {
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
@@ -6733,6 +6763,70 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
 
+    const turnAttachmentsPromise = Promise.all(
+      composerAttachmentsSnapshot.map(async (attachment) => {
+        if (turnUsesAttachmentUploads) {
+          const uploaded = getUploadedAttachments({ environmentId, images: [attachment] })?.[0];
+          if (!uploaded) {
+            throw new Error(`Attachment '${attachment.name}' did not finish uploading.`);
+          }
+          return uploaded;
+        }
+        if (attachment.type !== "image") {
+          throw new Error("This server does not support file attachments.");
+        }
+        return {
+          type: "image" as const,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          dataUrl: await readFileAsDataUrl(attachment.file),
+        };
+      }),
+    );
+    if (webhookTrigger) {
+      try {
+        const attachments = await turnAttachmentsPromise;
+        const result = await saveWebhookPrompt({
+          environmentId,
+          input: {
+            type: "savePrompt",
+            id: webhookTrigger.id,
+            prompt: {
+              text: outgoingMessageText,
+              attachments: [...webhookTrigger.attachments, ...attachments],
+              projectId: activeProject.id,
+              modelSelection: ctxSelectedModelSelection,
+              runtimeMode,
+              interactionMode: sendInteractionMode,
+              branch: activeThreadBranch,
+              worktreePath: activeThread.worktreePath,
+              baseBranch: baseBranchForWorktree,
+              startFromOrigin,
+              runSetupScript: Boolean(baseBranchForWorktree),
+            },
+          },
+        });
+        if (result._tag === "Failure") {
+          setThreadError(threadIdForSend, chatActionErrorMessage(squashAtomCommandFailure(result)));
+          return;
+        }
+        if (turnUsesAttachmentUploads) releaseDraftAttachments(composerAttachmentsSnapshot);
+        clearComposerDraftContent(composerDraftTarget);
+        toastManager.add({
+          type: "success",
+          title: "Trigger prompt saved",
+          description: "Enable the trigger in Settings when you are ready.",
+        });
+        await navigate({ to: "/settings/integrations" });
+      } catch (cause) {
+        setThreadError(threadIdForSend, chatActionErrorMessage(cause));
+      } finally {
+        sendInFlightRef.current = false;
+      }
+      return;
+    }
+
     const resolvedSubmissionIntent =
       submissionIntent === "background" && isLocalDraftThread ? "background" : "foreground";
     if (
@@ -6774,27 +6868,6 @@ export default function ChatView(props: ChatViewProps) {
 
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
-    const turnAttachmentsPromise = Promise.all(
-      composerAttachmentsSnapshot.map(async (attachment) => {
-        if (turnUsesAttachmentUploads) {
-          const uploaded = getUploadedAttachments({ environmentId, images: [attachment] })?.[0];
-          if (!uploaded) {
-            throw new Error(`Attachment '${attachment.name}' did not finish uploading.`);
-          }
-          return uploaded;
-        }
-        if (attachment.type !== "image") {
-          throw new Error("This server does not support file attachments.");
-        }
-        return {
-          type: "image" as const,
-          name: attachment.name,
-          mimeType: attachment.mimeType,
-          sizeBytes: attachment.sizeBytes,
-          dataUrl: await readFileAsDataUrl(attachment.file),
-        };
-      }),
-    );
     const optimisticAttachments = composerAttachmentsSnapshot.map((attachment) =>
       attachment.type === "image"
         ? {
@@ -8208,6 +8281,7 @@ export default function ChatView(props: ChatViewProps) {
                       <ComposerSurface.Host>
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
                           <ChatComposer
+                            submitLabel={webhookTrigger ? "Save trigger prompt" : undefined}
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}

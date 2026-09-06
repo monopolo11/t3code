@@ -1,3 +1,4 @@
+import { WebhookOperation, WebhookOperationResult, WebhookError } from "./webhookTriggers.ts";
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -614,9 +615,19 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
+class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks").add(
+  HttpApiEndpoint.post("operate", "/api/integrations/webhooks", {
+    headers: OptionalBearerHeaders,
+    payload: Schema.Struct({ operation: WebhookOperation }),
+    success: WebhookOperationResult,
+    error: [...EnvironmentHttpCommonError.members, WebhookError],
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
-  .add(EnvironmentConnectHttpApi) {}
+  .add(EnvironmentConnectHttpApi)
+  .add(EnvironmentWebhooksHttpApi) {}

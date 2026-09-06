@@ -141,6 +141,8 @@ type NewTaskFlowContextValue = {
   readonly selectedWorktreePath: string | null;
   readonly startFromOrigin: boolean;
   readonly draftKey: string | null;
+  readonly draftNamespace: string;
+  readonly setDraftNamespace: (value: string) => void;
   readonly editingPendingTask: QueuedThreadMessage | null;
   readonly prompt: string;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
@@ -202,6 +204,7 @@ type NewTaskFlowContextValue = {
 const NewTaskFlowContext = React.createContext<NewTaskFlowContextValue | null>(null);
 
 export function NewTaskFlowProvider(props: React.PropsWithChildren) {
+  const [draftNamespace, setDraftNamespace] = useState("new-task");
   const projects = useProjects();
   const threads = useThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -371,7 +374,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const selectedProjectDraftKey = editingPendingTask
     ? pendingTaskDraftKey(editingPendingTask.messageId)
     : selectedProject
-      ? `new-task:${scopedProjectKey(selectedProject.environmentId, selectedProject.id)}`
+      ? `${draftNamespace}:${scopedProjectKey(selectedProject.environmentId, selectedProject.id)}`
       : null;
   const selectedProjectDraft = useComposerDraft(selectedProjectDraftKey);
   const prompt = selectedProjectDraft.text;
@@ -1059,6 +1062,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedBranchName,
       selectedWorktreePath,
       startFromOrigin,
+      draftNamespace,
+      setDraftNamespace,
       draftKey: selectedProjectDraftKey,
       editingPendingTask,
       prompt,
@@ -1142,6 +1147,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedModelKey,
       selectedModelOption,
       selectedProjectDraftKey,
+      draftNamespace,
       selectedProviderStatus,
       setSelectedModelOptions,
       selectedProject,

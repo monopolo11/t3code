@@ -137,6 +137,8 @@ export function mapRemoteEnvironmentError(
         detail: "The environment rejected the authentication request.",
         traceId: error.traceId,
       });
+    case "WebhookError":
+      return new ConnectionBlockedError({ reason: "configuration", detail: error.message });
     case "EnvironmentResourceNotFoundError":
       // Not expected during connection authorization, but the shared request
       // error type now includes it (used by resource fetches like the thread

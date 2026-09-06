@@ -278,6 +278,10 @@
     "./dateTime": {
       "types": "./src/dateTime.ts",
       "import": "./src/dateTime.ts"
+    },
+    "./webhookTemplate": {
+      "types": "./src/webhookTemplate.ts",
+      "import": "./src/webhookTemplate.ts"
     }
   },
   "scripts": {

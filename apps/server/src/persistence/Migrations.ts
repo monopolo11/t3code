@@ -1,3 +1,4 @@
+import Migration0048 from "./Migrations/048_WebhookTriggers.ts";
 /**
  * Migration runner with an inline loader.
  *
@@ -118,6 +119,7 @@ export const migrationEntries = [
   [45, "ProjectionProjectsAutoPull", Migration0045],
   [46, "RepairAutomaticSettlementTimestamps", Migration0046],
   [47, "ProjectionProjectIcon", Migration0047],
+  [48, "WebhookTriggers", Migration0048],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

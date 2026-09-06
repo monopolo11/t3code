@@ -1043,6 +1043,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 });
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
+  submitLabel?: string | undefined;
   compact: boolean;
   activeContextWindow: ContextWindowSnapshot | null;
   activeThreadModelDisplayName: string | null;
@@ -1083,6 +1084,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         />
       ) : null}
       <ComposerPrimaryActions
+        submitLabel={props.submitLabel}
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
@@ -1165,6 +1167,7 @@ export interface ChatComposerHandle {
 // --------------------------------------------------------------------------
 
 export interface ChatComposerProps {
+  submitLabel?: string | undefined;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   attachmentUploadsCapabilityKnown: boolean;
@@ -4956,6 +4959,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           ) : null}
                           {activePendingProgress?.activeQuestion?.multiSelect ? (
                             <ComposerPrimaryActions
+                              submitLabel={props.submitLabel}
                               compact
                               pendingAction={pendingPrimaryAction}
                               isRunning={false}
@@ -5528,6 +5532,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     className="absolute bottom-0 right-0 flex items-center justify-end gap-1"
                   >
                     <ComposerPrimaryActions
+                      submitLabel={props.submitLabel}
                       compact
                       pendingAction={pendingPrimaryAction}
                       isRunning={false}
@@ -5626,6 +5631,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     </>
                   ) : null}
                   <ComposerFooterPrimaryActions
+                    submitLabel={props.submitLabel}
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     activeContextWindow={
                       settings.contextWindowMeterEnabled ? activeContextWindow : null
