@@ -1,3 +1,5 @@
+import { LocalComposerOptions } from "@t3tools/contracts";
+import { ProjectionProjectRepository } from "./persistence/Services/ProjectionProjects.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -497,6 +499,7 @@ const buildAppUnderTest = (options?: {
   onPairingChangesSubscribed?: Effect.Effect<void>;
   config?: Partial<ServerConfig.ServerConfig["Service"]>;
   layers?: {
+    projectionProjects?: Partial<ProjectionProjectRepository["Service"]>;
     keybindings?: Partial<Keybindings.Keybindings["Service"]>;
     environmentTheme?: Partial<EnvironmentTheme.EnvironmentThemeService["Service"]>;
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
@@ -744,6 +747,11 @@ const buildAppUnderTest = (options?: {
     ).pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(ProjectionProjectRepository)({
+            listAll: () => Effect.succeed([]),
+            getById: () => Effect.succeed(Option.none()),
+            ...options?.layers?.projectionProjects,
+          }),
           Layer.mock(Keybindings.Keybindings)({
             loadConfigState: Effect.succeed({
               keybindings: [],
@@ -1599,6 +1607,7 @@ const assertBrowserApiCorsPreflightHeaders = (
 ) => {
   assertBrowserApiCorsResponseHeaders(headers, options);
   assert.deepEqual(splitHeaderTokens(headers["access-control-allow-methods"] ?? null), [
+    "DELETE",
     "GET",
     "OPTIONS",
     "POST",
@@ -1653,6 +1662,265 @@ const NodeHttpServerTestWithWsDeflate = HttpServer.layerTestClient.pipe(
 );
 
 it.layer(NodeServices.layer)("server router seam", (it) => {
+  it.effect("manages localhost API keys through authenticated Settings endpoints", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const keyUrl = yield* getHttpServerUrl("/api/auth/local-api-key");
+      const composerUrl = yield* getHttpServerUrl("/api/local/composer");
+      assert.equal((yield* fetchEffect(keyUrl, { method: "POST" })).status, 401);
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      for (const scopes of [["orchestration:read"], ["access:write", "orchestration:read"]]) {
+        const pairingResponse = yield* fetchEffect(
+          yield* getHttpServerUrl("/api/auth/pairing-token"),
+          {
+            method: "POST",
+            headers: { cookie },
+            body: jsonRequestBody({ scopes }),
+          },
+        );
+        assert.equal(pairingResponse.status, 200);
+        const pairing = yield* responseJsonEffect<{ credential: string }>(pairingResponse);
+        const exchange = yield* exchangeAccessToken(pairing.credential, {
+          scope: scopes.join(" "),
+        });
+        assert.equal(exchange.response.status, 200);
+        const token = exchange.body.access_token;
+        assert.equal(
+          (yield* fetchEffect(keyUrl, {
+            method: "POST",
+            headers: { authorization: `Bearer ${token}` },
+          })).status,
+          403,
+        );
+      }
+      const status = yield* fetchEffect(keyUrl, { headers: { cookie } });
+      assert.deepEqual(yield* responseJsonEffect(status), { enabled: false });
+      assert.equal((yield* fetchEffect(composerUrl, { headers: { cookie } })).status, 401);
+      const created = yield* fetchEffect(keyUrl, { method: "POST", headers: { cookie } });
+      assert.equal(created.status, 200);
+      assert.equal(created.headers["cache-control"], "no-store");
+      const { key } = yield* responseJsonEffect<{ key: string }>(created);
+      const headers = { authorization: `Bearer ${key}` };
+      assert.equal((yield* fetchEffect(composerUrl, { headers })).status, 200);
+      assert.equal((yield* fetchEffect(keyUrl, { headers })).status, 401);
+      assert.equal(
+        (yield* fetchEffect(composerUrl, {
+          headers: { ...headers, "x-forwarded-for": "127.0.0.1" },
+        })).status,
+        403,
+      );
+      assert.equal(
+        (yield* fetchEffect(composerUrl, {
+          headers: { ...headers, origin: "https://remote.example" },
+        })).status,
+        403,
+      );
+      const rotated = yield* fetchEffect(keyUrl, { method: "POST", headers: { cookie } });
+      const replacement = yield* responseJsonEffect<{ key: string }>(rotated);
+      assert.equal((yield* fetchEffect(composerUrl, { headers })).status, 401);
+      const replacementHeaders = { authorization: `Bearer ${replacement.key}` };
+      assert.equal((yield* fetchEffect(composerUrl, { headers: replacementHeaders })).status, 200);
+      assert.equal(
+        (yield* fetchEffect(keyUrl, { method: "DELETE", headers: { cookie } })).status,
+        200,
+      );
+      assert.equal((yield* fetchEffect(composerUrl, { headers: replacementHeaders })).status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "returns workspace composer options and creates localhost threads with the selected parameters",
+    () =>
+      Effect.gen(function* () {
+        const { id, ...projectData } = makeDefaultOrchestrationReadModel().projects[0]!;
+        const project = {
+          ...projectData,
+          projectId: id,
+          defaultThreadEnvMode: "worktree" as const,
+          autoPull: false,
+        };
+        const provider = {
+          instanceId: defaultModelSelection.instanceId,
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          installed: true,
+          version: "1.0",
+          status: "ready" as const,
+          auth: { status: "authenticated" as const },
+          checkedAt: "2026-01-01T00:00:00.000Z",
+          models: [
+            {
+              slug: defaultModelSelection.model,
+              name: "Codex",
+              isCustom: false,
+              capabilities: {
+                optionDescriptors: [
+                  {
+                    id: "reasoningEffort",
+                    label: "Reasoning",
+                    type: "select" as const,
+                    options: [{ id: "high", label: "High" }],
+                    currentValue: "high",
+                  },
+                ],
+              },
+            },
+          ],
+          skills: [],
+          slashCommands: [],
+        };
+        const workspaceSnapshot = {
+          cwd: project.workspaceRoot,
+          checkedAt: provider.checkedAt,
+          skills: [
+            {
+              name: "review",
+              path: `${project.workspaceRoot}/.agents/skills/review/SKILL.md`,
+              enabled: true,
+            },
+          ],
+          slashCommands: [{ name: "review" }],
+        };
+        let refreshed = false;
+        const dispatched: Array<OrchestrationCommand> = [];
+        const drains: number[] = [];
+        yield* buildAppUnderTest({
+          layers: {
+            projectionProjects: {
+              listAll: () => Effect.succeed([project]),
+              getById: ({ projectId }) =>
+                Effect.succeed(projectId === id ? Option.some(project) : Option.none()),
+            },
+            providerRegistry: {
+              getProviders: Effect.sync(() => [
+                { ...provider, workspaceSnapshots: refreshed ? [workspaceSnapshot] : [] },
+              ]),
+              refreshWorkspaceSnapshot: (input) =>
+                Effect.sync(() => {
+                  assert.equal(input.cwd, project.workspaceRoot);
+                  assert.equal(input.instanceId, provider.instanceId);
+                  refreshed = true;
+                  return [{ ...provider, workspaceSnapshots: [workspaceSnapshot] }];
+                }),
+            },
+            orchestrationEngine: {
+              dispatch: (command) =>
+                Effect.gen(function* () {
+                  dispatched.push(command);
+                  if (command.type === "thread.turn.start" && command.message.text === "fail")
+                    return yield* new OrchestrationListenerCallbackError({
+                      listener: "read-model",
+                      detail: "Turn rejected",
+                    });
+                  return { sequence: dispatched.length };
+                }),
+            },
+            threadDeletionReactor: {
+              drainThrough: (sequence) =>
+                Effect.sync(() => {
+                  drains.push(sequence);
+                }),
+            },
+          },
+        });
+        const cookie = yield* getAuthenticatedSessionCookieHeader();
+        const keyResponse = yield* fetchEffect(yield* getHttpServerUrl("/api/auth/local-api-key"), {
+          method: "POST",
+          headers: { cookie },
+        });
+        const { key } = yield* responseJsonEffect<{ key: string }>(keyResponse);
+        const headers = { authorization: `Bearer ${key}` };
+        const composer = yield* fetchEffect(
+          yield* getHttpServerUrl(`/api/local/composer?projectId=${id}&instanceId=codex`),
+          { headers },
+        );
+        assert.equal(composer.status, 200, yield* composer.text);
+        assert.equal(composer.headers["cache-control"], "no-store");
+        const options = yield* responseJsonEffect<typeof LocalComposerOptions.Type>(composer);
+        assert.deepEqual(options.providers[0]?.workspaceSnapshots, [workspaceSnapshot]);
+        assert.deepEqual(options.providers[0]?.models, provider.models);
+        assert.equal(options.defaults.threadEnvMode, "worktree");
+        assert.deepEqual(options.defaults.modelSelection, defaultModelSelection);
+        assert.deepEqual(options.runtimeModes, [
+          "approval-required",
+          "auto-accept-edits",
+          "auto",
+          "full-access",
+        ]);
+        const input = {
+          projectId: id,
+          title: "API thread",
+          prompt: "$review Check the change",
+          modelSelection: {
+            ...defaultModelSelection,
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        };
+        const url = yield* getHttpServerUrl("/api/local/threads");
+        assert.equal(
+          (yield* fetchEffect(url, { method: "POST", body: jsonRequestBody(input) })).status,
+          401,
+        );
+        assert.equal(
+          (yield* fetchEffect(url, {
+            method: "POST",
+            headers: { ...headers, "x-forwarded-for": "127.0.0.1" },
+            body: jsonRequestBody(input),
+          })).status,
+          403,
+        );
+        assert.equal(dispatched.length, 0);
+        const response = yield* fetchEffect(url, {
+          method: "POST",
+          headers,
+          body: jsonRequestBody(input),
+        });
+        assert.equal(response.status, 200);
+        const result = yield* responseJsonEffect<{ threadId: string; sequence: number }>(response);
+        assert.equal(result.sequence, 2);
+        assert.deepEqual(
+          dispatched.map((command) => command.type),
+          ["thread.create", "thread.turn.start"],
+        );
+        assert.deepEqual(drains, [1]);
+        const turn = dispatched[1];
+        assert.equal(turn?.type, "thread.turn.start");
+        if (turn?.type !== "thread.turn.start") return;
+        assert.equal(turn.threadId, result.threadId);
+        assert.equal(turn.message.text, input.prompt);
+        assert.deepEqual(turn.modelSelection, input.modelSelection);
+        assert.equal(turn.runtimeMode, input.runtimeMode);
+        assert.equal(turn.interactionMode, input.interactionMode);
+        assert.isUndefined(turn.bootstrap);
+        for (const invalid of [
+          { ...input, projectId: "missing" },
+          { ...input, runtimeMode: "invalid" },
+          { ...input, createWorktree: { baseBranch: "main" }, worktreePath: "/tmp/conflict" },
+        ]) {
+          assert.equal(
+            (yield* fetchEffect(url, { method: "POST", headers, body: jsonRequestBody(invalid) }))
+              .status,
+            400,
+          );
+        }
+        assert.equal(dispatched.length, 2);
+        assert.equal(
+          (yield* fetchEffect(url, {
+            method: "POST",
+            headers,
+            body: jsonRequestBody({ ...input, prompt: "fail" }),
+          })).status,
+          400,
+        );
+        assert.deepEqual(
+          dispatched.slice(2).map((command) => command.type),
+          ["thread.create", "thread.turn.start", "thread.delete"],
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("parks HTTP ingress until command readiness", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -5192,6 +5460,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.status, 204);
       assert.equal(response.headers["access-control-allow-origin"], "*");
       assert.deepEqual(splitHeaderTokens(response.headers["access-control-allow-methods"]), [
+        "DELETE",
         "GET",
         "OPTIONS",
         "POST",

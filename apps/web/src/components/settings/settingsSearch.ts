@@ -507,6 +507,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "connections-local-api",
+    localBackendManagementOnly: true,
+    title: "Localhost API",
+    to: "/settings/connections",
+    searchTerms: [
+      "api key generate replace rotate revoke token composer threads integrations localhost",
+    ],
+  },
+  {
     id: "remote-environments",
     title: "Remote environments",
     to: "/settings/connections",
