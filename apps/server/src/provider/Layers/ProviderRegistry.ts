@@ -30,6 +30,7 @@ import {
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
@@ -358,7 +359,7 @@ export const ProviderRegistryLive = Layer.effect(
     );
     const providersRef = yield* Ref.make<ReadonlyArray<ServerProvider>>(cachedProviders);
     const workspaceRefreshesRef = yield* Ref.make<
-      ReadonlyMap<ProviderInstance, ReadonlySet<string>>
+      ReadonlyMap<ProviderInstance, ReadonlyMap<string, Deferred.Deferred<void>>>
     >(new Map());
     const maintenanceActionStatesRef = yield* Ref.make<
       ReadonlyMap<ProviderInstanceId, { readonly update?: ServerProviderUpdateState | undefined }>
@@ -818,50 +819,67 @@ export const ProviderRegistryLive = Layer.effect(
       }
       const instance = yield* instanceRegistry.getInstance(input.instanceId);
       if (!instance?.snapshotForCwd) return providers;
-      const claimed = yield* Ref.modify(workspaceRefreshesRef, (refreshes) => {
-        const current = refreshes.get(instance);
-        if (current?.has(input.cwd)) return [false, refreshes] as const;
-        const next = new Map(refreshes);
-        next.set(instance, new Set(current).add(input.cwd));
-        return [true, next] as const;
-      });
-      if (!claimed) return yield* Ref.get(providersRef);
-      return yield* instance.snapshotForCwd(input.cwd).pipe(
-        Effect.flatMap((scopedSnapshot) =>
-          scopedSnapshot.status === "error"
-            ? Ref.get(providersRef)
-            : instanceRegistry.getInstance(input.instanceId).pipe(
-                Effect.flatMap((currentInstance) => {
-                  if (currentInstance !== instance) return Ref.get(providersRef);
-                  return Ref.modify(providersRef, (currentProviders) => {
-                    const nextProviders = currentProviders.map((candidate) =>
-                      candidate.instanceId === input.instanceId &&
-                      !candidate.workspaceSnapshots?.some((s) => s.cwd === input.cwd)
-                        ? upsertProviderWorkspaceSnapshot(candidate, input.cwd, scopedSnapshot)
-                        : candidate,
-                    );
-                    return [[currentProviders, nextProviders] as const, nextProviders];
-                  }).pipe(
-                    Effect.tap(([previousProviders, nextProviders]) =>
-                      haveProvidersChanged(previousProviders, nextProviders)
-                        ? PubSub.publish(changesPubSub, nextProviders)
-                        : Effect.void,
-                    ),
-                    Effect.map(([, nextProviders]) => nextProviders),
-                  );
-                }),
-              ),
-        ),
-        Effect.ensuring(
-          Ref.update(workspaceRefreshesRef, (refreshes) => {
+      const snapshotForCwd = instance.snapshotForCwd;
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const completion = yield* Deferred.make<void>();
+          const active = yield* Ref.modify(workspaceRefreshesRef, (refreshes) => {
+            const current = refreshes.get(instance);
+            const pending = current?.get(input.cwd);
+            if (pending) return [pending, refreshes] as const;
             const next = new Map(refreshes);
-            const current = new Set(next.get(instance));
-            current.delete(input.cwd);
-            if (current.size) next.set(instance, current);
-            else next.delete(instance);
-            return next;
-          }),
-        ),
+            next.set(instance, new Map(current).set(input.cwd, completion));
+            return [undefined, next] as const;
+          });
+          if (active) {
+            yield* restore(Deferred.await(active));
+            return yield* Ref.get(providersRef);
+          }
+          return yield* restore(
+            snapshotForCwd(input.cwd).pipe(
+              Effect.flatMap((scopedSnapshot) =>
+                scopedSnapshot.status === "error"
+                  ? Ref.get(providersRef)
+                  : instanceRegistry.getInstance(input.instanceId).pipe(
+                      Effect.flatMap((currentInstance) => {
+                        if (currentInstance !== instance) return Ref.get(providersRef);
+                        return Ref.modify(providersRef, (currentProviders) => {
+                          const nextProviders = currentProviders.map((candidate) =>
+                            candidate.instanceId === input.instanceId &&
+                            !candidate.workspaceSnapshots?.some((s) => s.cwd === input.cwd)
+                              ? upsertProviderWorkspaceSnapshot(
+                                  candidate,
+                                  input.cwd,
+                                  scopedSnapshot,
+                                )
+                              : candidate,
+                          );
+                          return [[currentProviders, nextProviders] as const, nextProviders];
+                        }).pipe(
+                          Effect.tap(([previousProviders, nextProviders]) =>
+                            haveProvidersChanged(previousProviders, nextProviders)
+                              ? PubSub.publish(changesPubSub, nextProviders)
+                              : Effect.void,
+                          ),
+                          Effect.map(([, nextProviders]) => nextProviders),
+                        );
+                      }),
+                    ),
+              ),
+            ),
+          ).pipe(
+            Effect.ensuring(
+              Ref.update(workspaceRefreshesRef, (refreshes) => {
+                const next = new Map(refreshes);
+                const current = new Map(next.get(instance));
+                current.delete(input.cwd);
+                if (current.size) next.set(instance, current);
+                else next.delete(instance);
+                return next;
+              }).pipe(Effect.andThen(Deferred.succeed(completion, undefined))),
+            ),
+          );
+        }),
       );
     });
 

@@ -4,6 +4,7 @@ import {
   EnvironmentAuthenticatedAuth,
   EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
+  LocalApiAuth,
   type AuthBrowserSessionRequest,
   type AuthBrowserSessionResult,
   type AuthCreatePairingCredentialInput,
@@ -83,6 +84,9 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
         ),
         HttpApiBuilder.group(EnvironmentHttpApi, "auth", (handlers) =>
           handlers
+            .handle("localApiKeyStatus", () => unexpectedEndpoint("auth.localApiKeyStatus"))
+            .handle("createLocalApiKey", () => unexpectedEndpoint("auth.createLocalApiKey"))
+            .handle("revokeLocalApiKey", () => unexpectedEndpoint("auth.revokeLocalApiKey"))
             .handle(
               "session",
               Effect.fn("test.environment.auth.session")(function* () {
@@ -119,6 +123,7 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
         ),
       ]),
       Effect.provideService(EnvironmentAuthenticatedAuth, authenticatedAuth),
+      Effect.provideService(LocalApiAuth, (httpEffect) => httpEffect),
       Effect.scoped,
     ),
   );

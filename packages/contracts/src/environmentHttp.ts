@@ -1,3 +1,11 @@
+import {
+  LocalApiKeyStatus,
+  LocalApiKeyCreated,
+  LocalComposerQuery,
+  LocalComposerOptions,
+  LocalThreadCreateInput,
+  LocalThreadCreated,
+} from "./localApi.ts";
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -416,6 +424,23 @@ class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata").add(
 
 class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
   .add(
+    HttpApiEndpoint.get("localApiKeyStatus", "/api/auth/local-api-key", {
+      headers: OptionalBearerHeaders,
+      success: LocalApiKeyStatus,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+    HttpApiEndpoint.post("createLocalApiKey", "/api/auth/local-api-key", {
+      headers: OptionalBearerHeaders,
+      success: LocalApiKeyCreated,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+    HttpApiEndpoint.delete("revokeLocalApiKey", "/api/auth/local-api-key", {
+      headers: OptionalBearerHeaders,
+      success: LocalApiKeyStatus,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
     HttpApiEndpoint.get("session", "/api/auth/session", {
       headers: OptionalBearerHeaders,
       success: AuthSessionState,
@@ -614,7 +639,33 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
+export class LocalApiAuth extends HttpApiMiddleware.Service<LocalApiAuth>()("LocalApiAuth", {
+  error: [
+    EnvironmentHttpUnauthorizedError,
+    EnvironmentHttpForbiddenError,
+    EnvironmentInternalError,
+  ],
+}) {}
+
+class LocalHttpApi extends HttpApiGroup.make("local")
+  .add(
+    HttpApiEndpoint.get("composer", "/api/local/composer", {
+      headers: OptionalBearerHeaders,
+      payload: LocalComposerQuery,
+      success: LocalComposerOptions,
+      error: [EnvironmentHttpBadRequestError, EnvironmentInternalError],
+    }),
+    HttpApiEndpoint.post("createThread", "/api/local/threads", {
+      headers: OptionalBearerHeaders,
+      payload: LocalThreadCreateInput,
+      success: LocalThreadCreated,
+      error: [EnvironmentHttpBadRequestError, EnvironmentInternalError],
+    }),
+  )
+  .middleware(LocalApiAuth) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
+  .add(LocalHttpApi)
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)

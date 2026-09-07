@@ -1,3 +1,4 @@
+import { localApiKeyStatus, createLocalApiKey, revokeLocalApiKey } from "./LocalApiKey.ts";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -235,6 +236,39 @@ export const authHttpApiLayer = HttpApiBuilder.group(
     const sessions = yield* SessionStore.SessionStore;
 
     return handlers
+      .handle(
+        "localApiKeyStatus",
+        Effect.fn("environment.auth.localApiKeyStatus")(function* () {
+          yield* requireEnvironmentScope(AuthAccessReadScope);
+          yield* appendCredentialResponseHeaders;
+          return yield* localApiKeyStatus.pipe(
+            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+          );
+        }),
+      )
+      .handle(
+        "createLocalApiKey",
+        Effect.fn("environment.auth.createLocalApiKey")(function* () {
+          yield* requireEnvironmentScope(AuthAccessWriteScope);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          yield* appendCredentialResponseHeaders;
+          return yield* createLocalApiKey.pipe(
+            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+          );
+        }),
+      )
+      .handle(
+        "revokeLocalApiKey",
+        Effect.fn("environment.auth.revokeLocalApiKey")(function* () {
+          yield* requireEnvironmentScope(AuthAccessWriteScope);
+          yield* appendCredentialResponseHeaders;
+          return yield* revokeLocalApiKey.pipe(
+            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+          );
+        }),
+      )
+
       .handle(
         "session",
         Effect.fn("environment.auth.session")(

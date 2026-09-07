@@ -1541,12 +1541,15 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             yield* Deferred.await(probeStarted);
             const duplicateRefresh = yield* registry
               .refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" })
-              .pipe(Effect.forkChild);
-            yield* Effect.yieldNow;
+              .pipe(Effect.forkChild({ startImmediately: true }));
             assert.strictEqual(yield* Ref.get(snapshotCalls), 2);
             yield* Deferred.succeed(releaseProbe, undefined);
             yield* Fiber.join(firstRefresh);
-            yield* Fiber.join(duplicateRefresh);
+            const duplicateProviders = yield* Fiber.join(duplicateRefresh);
+            assert.deepStrictEqual(
+              duplicateProviders[0]?.workspaceSnapshots?.[0]?.skills,
+              scopedProvider.skills,
+            );
             const published = yield* Fiber.join(workspaceUpdate);
             assert.strictEqual(published._tag, "Some");
             const providers = yield* registry.getProviders;
