@@ -1,5 +1,5 @@
 import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronLeftIcon, SaveIcon } from "lucide-react";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
@@ -17,6 +17,7 @@ interface PendingActionState {
 }
 
 interface ComposerPrimaryActionsProps {
+  submitLabel?: string | undefined;
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
@@ -60,6 +61,7 @@ const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
 };
 
 export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
+  submitLabel,
   compact,
   pendingAction,
   isRunning,
@@ -247,7 +249,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                 ? "Preparing worktree"
                 : isSendBusy
                   ? "Sending"
-                  : "Send message"
+                  : (submitLabel ?? "Send message")
       }
     >
       {stageBackdropVariant ? (
@@ -257,6 +259,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       ) : null}
       {isConnecting || isSendBusy ? (
         <Spinner className="size-3.5" aria-hidden="true" />
+      ) : submitLabel ? (
+        <SaveIcon className="size-4" />
       ) : (
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path

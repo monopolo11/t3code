@@ -1,3 +1,5 @@
+import { webhookHttpApiLayer, webhookPublicRoutes } from "./webhooks/http.ts";
+import { WebhookService } from "./webhooks/WebhookService.ts";
 import { EnvironmentHttpApi, ProviderDriverKind } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -544,8 +546,10 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
+      Layer.provide(webhookHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
+    webhookPublicRoutes,
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
     attachmentUploadRouteLayer,
@@ -556,6 +560,12 @@ export const makeRoutesLayer = Layer.mergeAll(
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
+  Layer.provideMerge(
+    WebhookService.layer.pipe(
+      Layer.provide(ServerSecretStore.layer),
+      Layer.provide(SqlitePersistenceLayerLive),
+    ),
+  ),
   Layer.provide(PullRequestServiceLive),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),

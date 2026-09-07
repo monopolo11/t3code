@@ -1,5 +1,6 @@
 import {
   EnvironmentHttpApi,
+  WebhookError,
   EnvironmentHttpCommonError,
   type EnvironmentAuthInvalidError,
   type EnvironmentInternalError,
@@ -17,6 +18,8 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientError } from "effect/unstable/http";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+
+const isWebhookError = Schema.is(WebhookError);
 
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 
@@ -67,6 +70,7 @@ export class RemoteEnvironmentAuthTimeoutError extends Data.TaggedError(
 }
 
 export type RemoteEnvironmentRequestError =
+  | WebhookError
   | EnvironmentRequestInvalidError
   | EnvironmentAuthInvalidError
   | EnvironmentScopeRequiredError
@@ -112,7 +116,7 @@ const failRemoteRequest = (
   if (cause instanceof RemoteEnvironmentAuthTimeoutError) {
     return Effect.fail(cause);
   }
-  if (isEnvironmentHttpCommonError(cause)) {
+  if (isEnvironmentHttpCommonError(cause) || isWebhookError(cause)) {
     return Effect.fail(cause);
   }
   if (Schema.isSchemaError(cause)) {

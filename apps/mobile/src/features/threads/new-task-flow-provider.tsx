@@ -144,6 +144,8 @@ type NewTaskFlowContextValue = {
   readonly selectedWorktreePath: string | null;
   readonly startFromOrigin: boolean;
   readonly draftKey: string | null;
+  readonly draftNamespace: string;
+  readonly setDraftNamespace: (value: string) => void;
   readonly editingPendingTask: QueuedThreadMessage | null;
   readonly prompt: string;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
@@ -211,6 +213,7 @@ type NewTaskFlowContextValue = {
 const NewTaskFlowContext = React.createContext<NewTaskFlowContextValue | null>(null);
 
 export function NewTaskFlowProvider(props: React.PropsWithChildren) {
+  const [draftNamespace, setDraftNamespace] = useState("new-task");
   const projects = useProjects();
   const threads = useThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -384,7 +387,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const selectedProjectDraftKey = editingPendingTask
     ? pendingTaskDraftKey(editingPendingTask.messageId)
     : selectedProject
-      ? activeDraftKey
+      ? draftNamespace === "new-task"
+        ? activeDraftKey
+        : `${draftNamespace}:${scopedProjectKey(selectedProject.environmentId, selectedProject.id)}`
       : null;
   // selectedProject can resolve without setProject ever running (the
   // environment's first project is the fallback, and the draft screen skips
@@ -392,7 +397,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // still needs a draft to write into, so bind one the moment a project is
   // in view and nothing else owns the key.
   useEffect(() => {
-    if (activeDraftKey !== null || editingPendingTask !== null || selectedProject === null) {
+    if (
+      draftNamespace !== "new-task" ||
+      activeDraftKey !== null ||
+      editingPendingTask !== null ||
+      selectedProject === null
+    ) {
       return;
     }
     setActiveDraftKey(
@@ -401,7 +411,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         projectId: selectedProject.id,
       }),
     );
-  }, [activeDraftKey, editingPendingTask, selectedProject]);
+  }, [activeDraftKey, editingPendingTask, selectedProject, draftNamespace]);
   const selectedProjectDraft = useComposerDraft(selectedProjectDraftKey);
   const prompt = selectedProjectDraft.text;
   const attachments = selectedProjectDraft.attachments;
@@ -659,6 +669,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // user. A pending-task edit owns its own key and is untouched here.
   const carryDraftContentTo = useCallback(
     (project: EnvironmentProject) => {
+      if (draftNamespace !== "new-task") return;
       const target = { environmentId: project.environmentId, projectId: project.id };
       if (activeDraftKey !== null && isNewTaskDraftKey(activeDraftKey)) {
         retargetNewTaskDraft(activeDraftKey, target);
@@ -666,7 +677,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         setActiveDraftKey(createNewTaskDraft(target));
       }
     },
-    [activeDraftKey],
+    [activeDraftKey, draftNamespace],
   );
 
   const setProject = useCallback(
@@ -1112,6 +1123,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedBranchName,
       selectedWorktreePath,
       startFromOrigin,
+      draftNamespace,
+      setDraftNamespace,
       draftKey: selectedProjectDraftKey,
       editingPendingTask,
       prompt,
@@ -1196,6 +1209,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedModelKey,
       selectedModelOption,
       selectedProjectDraftKey,
+      draftNamespace,
       selectedProviderStatus,
       setSelectedModelOptions,
       selectedProject,

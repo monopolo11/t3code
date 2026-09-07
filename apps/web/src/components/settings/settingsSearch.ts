@@ -356,6 +356,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow open drive preview tools sessions"],
   },
   {
+    id: "webhook-triggers",
+    title: "Webhook triggers",
+    to: "/settings/integrations",
+    targetId: "webhook-triggers",
+    searchTerms: ["github linear oauth cloudflare events automation prompt"],
+  },
+  {
     id: "browser-profiles",
     title: "Browser profiles",
     to: "/settings/integrations",

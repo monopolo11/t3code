@@ -1,3 +1,8 @@
+import { type WebhookTrigger, type ChatAttachment } from "@t3tools/contracts";
+import { prepareTurnAttachments } from "../../lib/attachmentUpload";
+import { setComposerDraftText, updateComposerDraftSettings } from "../../state/use-composer-drafts";
+import { webhookEnvironment } from "../../state/webhooks";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useAtomValue } from "@effect/atom-react";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import {
@@ -146,6 +151,7 @@ function NewTaskWorkspaceIcon(props: {
 }
 
 export function NewTaskDraftScreen(props: {
+  readonly webhookTriggerId?: string | undefined;
   readonly initialProjectRef?: {
     readonly environmentId?: string;
     readonly projectId?: string;
@@ -160,7 +166,75 @@ export function NewTaskDraftScreen(props: {
   const projects = useProjects();
   const createProjectThread = useCreateProjectThread();
   const flow = useNewTaskFlow();
+  const setDraftNamespace = flow.setDraftNamespace;
   const navigation = useNavigation();
+  const webhookOperation = useAtomCommand(webhookEnvironment.operate, { reportFailure: false });
+  const [webhookTrigger, setWebhookTrigger] = useState<WebhookTrigger | null>(null);
+  const [retainedWebhookAttachments, setRetainedWebhookAttachments] = useState<
+    readonly ChatAttachment[]
+  >([]);
+  const [webhookError, setWebhookError] = useState<string | null>(null);
+  const loadedWebhookRef = useRef<string | null>(null);
+  useEffect(() => {
+    setDraftNamespace(props.webhookTriggerId ? `webhook:${props.webhookTriggerId}` : "new-task");
+  }, [setDraftNamespace, props.webhookTriggerId]);
+  useEffect(() => {
+    if (
+      !props.webhookTriggerId ||
+      !flow.selectedProject ||
+      !flow.draftKey ||
+      flow.draftNamespace !== `webhook:${props.webhookTriggerId}` ||
+      loadedWebhookRef.current === props.webhookTriggerId
+    )
+      return;
+    if (flow.selectedProject.environmentId !== props.initialProjectRef?.environmentId) return;
+    const draftKey = flow.draftKey;
+    let cancelled = false;
+    void webhookOperation({
+      environmentId: flow.selectedProject.environmentId,
+      input: { type: "list" },
+    }).then((result) => {
+      if (cancelled) return;
+      const trigger =
+        result._tag === "Success"
+          ? result.value.state.triggers.find((item) => item.id === props.webhookTriggerId)
+          : null;
+      if (!trigger) {
+        setWebhookError("Could not load this trigger. Return to Integrations and reconnect.");
+        return;
+      }
+      loadedWebhookRef.current = trigger.id;
+      setWebhookTrigger(trigger);
+      setRetainedWebhookAttachments(
+        (trigger.prompt?.attachments ?? []).filter(
+          (attachment): attachment is ChatAttachment => "id" in attachment,
+        ),
+      );
+      setComposerDraftText(draftKey, trigger.prompt?.text ?? "Handle this event:\n{{payload}}");
+      if (trigger.prompt)
+        updateComposerDraftSettings(draftKey, {
+          modelSelection: trigger.prompt.modelSelection,
+          runtimeMode: trigger.prompt.runtimeMode,
+          interactionMode: trigger.prompt.interactionMode,
+          workspaceSelection: {
+            mode: trigger.prompt.baseBranch ? "worktree" : "local",
+            branch: trigger.prompt.baseBranch ?? trigger.prompt.branch,
+            worktreePath: trigger.prompt.worktreePath,
+            startFromOrigin: trigger.prompt.startFromOrigin,
+          },
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    props.webhookTriggerId,
+    props.initialProjectRef?.environmentId,
+    flow.selectedProject,
+    flow.draftKey,
+    flow.draftNamespace,
+    webhookOperation,
+  ]);
   const {
     consumeShare,
     getShare,
@@ -998,6 +1072,71 @@ export function NewTaskDraftScreen(props: {
       return;
     }
 
+    if (props.webhookTriggerId) {
+      if (
+        !webhookTrigger ||
+        !environmentConnected ||
+        selectedProject.environmentId !== props.initialProjectRef?.environmentId
+      ) {
+        Alert.alert(
+          "Trigger unavailable",
+          "Select and connect to the machine that owns this integration.",
+        );
+        return;
+      }
+      flow.setSubmitting(true);
+      try {
+        const prepared = await prepareTurnAttachments({
+          environmentId: selectedProject.environmentId,
+          attachments: draft.attachments,
+          supportsImageUploads:
+            selectedEnvironmentServerConfig?.environment.capabilities.attachmentUploads === true,
+          persistUploadedReferences: async (attachments) => {
+            flow.replaceAttachments(attachments);
+            await flushComposerDrafts();
+            return "persisted";
+          },
+        });
+        if (prepared.status !== "ready")
+          throw new Error("The attachments are no longer available.");
+        const result = await webhookOperation({
+          environmentId: selectedProject.environmentId,
+          input: {
+            type: "savePrompt",
+            id: webhookTrigger.id,
+            prompt: {
+              text: initialMessageText,
+              attachments: [...retainedWebhookAttachments, ...prepared.attachments],
+              projectId: selectedProject.id,
+              modelSelection,
+              runtimeMode,
+              interactionMode,
+              branch: selectedBranchName,
+              worktreePath: workspaceMode === "worktree" ? null : selectedWorktreePath,
+              baseBranch: workspaceMode === "worktree" ? selectedBranchName : null,
+              startFromOrigin,
+              runSetupScript: workspaceMode === "worktree",
+            },
+          },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        clearComposerDraftContent(draftKey);
+        Alert.alert(
+          "Trigger prompt saved",
+          "Enable the trigger in Settings → Integrations when you are ready.",
+        );
+        setSubmitNavigationAction(CommonActions.goBack());
+      } catch (cause) {
+        Alert.alert(
+          "Could not save trigger",
+          cause instanceof Error ? cause.message : "Try again after reconnecting.",
+        );
+      } finally {
+        flow.setSubmitting(false);
+      }
+      return;
+    }
+
     const editingPendingTask = flow.editingPendingTask;
 
     if (queuesInsteadOfStarting) {
@@ -1341,6 +1480,31 @@ export function NewTaskDraftScreen(props: {
         </Pressable>
       ) : null}
 
+      {props.webhookTriggerId && (
+        <View className="px-3 py-2">
+          <Text className="text-sm text-foreground">
+            {webhookError ?? `Trigger: ${webhookTrigger?.name ?? "Loading…"}`}
+          </Text>
+          <Text className="text-xs text-foreground-muted">
+            Use {"{{payload}}"} or a path such as {"{{payload.data.title}}"}. Save this prompt for
+            future events.
+          </Text>
+          {retainedWebhookAttachments.map((attachment) => (
+            <Pressable
+              key={attachment.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${attachment.name}`}
+              onPress={() =>
+                setRetainedWebhookAttachments((current) =>
+                  current.filter((item) => item.id !== attachment.id),
+                )
+              }
+            >
+              <Text className="text-xs text-foreground">{attachment.name} ×</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
       <ComposerSurface
         style={{
           borderRadius: 26,
@@ -1458,14 +1622,22 @@ export function NewTaskDraftScreen(props: {
                     attachmentBlockReason ??
                     (flow.submitting
                       ? "Starting task"
-                      : attachmentsUploading
-                        ? "Queue task, sends when uploads finish"
-                        : environmentConnected
-                          ? "Start task"
-                          : "Queue task")
+                      : props.webhookTriggerId
+                        ? "Save trigger prompt"
+                        : attachmentsUploading
+                          ? "Queue task, sends when uploads finish"
+                          : environmentConnected
+                            ? "Start task"
+                            : "Queue task")
                   }
-                  disabled={!canStart}
-                  icon={queuesInsteadOfStarting ? "tray.and.arrow.up" : "arrow.up"}
+                  disabled={!canStart || Boolean(props.webhookTriggerId && !webhookTrigger)}
+                  icon={
+                    props.webhookTriggerId
+                      ? "checkmark"
+                      : queuesInsteadOfStarting
+                        ? "tray.and.arrow.up"
+                        : "arrow.up"
+                  }
                   onPress={() => void handleStart()}
                   variant="primary"
                 />

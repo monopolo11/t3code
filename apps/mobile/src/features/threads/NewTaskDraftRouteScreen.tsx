@@ -11,6 +11,7 @@ type NewTaskDraftRouteParams = {
   readonly pendingTaskId?: string | string[];
   readonly draftId?: string | string[];
   readonly incomingShareId?: string | string[];
+  readonly webhookTriggerId?: string;
 };
 
 export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
@@ -38,6 +39,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       />
       <NewTaskDraftScreen
         initialProjectRef={initialProjectRef}
+        webhookTriggerId={params.webhookTriggerId}
         incomingShareId={
           Array.isArray(params.incomingShareId) ? params.incomingShareId[0] : params.incomingShareId
         }
