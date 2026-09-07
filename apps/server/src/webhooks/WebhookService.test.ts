@@ -24,7 +24,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import migration from "../persistence/Migrations/049_WebhookTriggers.ts";
+import migration from "../persistence/Migrations/050_WebhookTriggers.ts";
 import { make } from "./WebhookService.ts";
 
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(OAuthCredentials));
